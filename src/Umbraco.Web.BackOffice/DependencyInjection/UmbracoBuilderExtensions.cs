@@ -1,14 +1,18 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Umbraco.Cms.Core.Cache;
 using Umbraco.Cms.Core.DependencyInjection;
-using Umbraco.Cms.Core.Hosting;
 using Umbraco.Cms.Core.IO;
 using Umbraco.Cms.Core.Notifications;
+using Umbraco.Cms.Core.Routing;
 using Umbraco.Cms.Core.Services;
+using Umbraco.Cms.Core.Services.Implement;
 using Umbraco.Cms.Infrastructure.DependencyInjection;
 using Umbraco.Cms.Infrastructure.Examine.DependencyInjection;
 using Umbraco.Cms.Infrastructure.WebAssets;
@@ -22,6 +26,7 @@ using Umbraco.Cms.Web.BackOffice.Security;
 using Umbraco.Cms.Web.BackOffice.Services;
 using Umbraco.Cms.Web.BackOffice.SignalR;
 using Umbraco.Cms.Web.BackOffice.Trees;
+using IHostingEnvironment = Umbraco.Cms.Core.Hosting.IHostingEnvironment;
 
 namespace Umbraco.Extensions
 {
@@ -33,30 +38,32 @@ namespace Umbraco.Extensions
         /// <summary>
         /// Adds all required components to run the Umbraco back office
         /// </summary>
-        public static IUmbracoBuilder AddBackOffice(this IUmbracoBuilder builder, Action<IMvcBuilder> configureMvc = null) => builder
-                .AddConfiguration()
-                .AddUmbracoCore()
-                .AddWebComponents()
-                .AddRuntimeMinifier()
-                .AddBackOfficeCore()
-                .AddBackOfficeAuthentication()
-                .AddBackOfficeIdentity()
-                .AddMembersIdentity()
-                .AddBackOfficeAuthorizationPolicies()
-                .AddUmbracoProfiler()
-                .AddMvcAndRazor(configureMvc)
-                .AddWebServer()
-                .AddPreviewSupport()
-                .AddHostedServices()
-                .AddNuCache()
-                .AddDistributedCache()
-                .AddModelsBuilderDashboard()
-                .AddUnattendedInstallInstallCreateUser()
-                .AddCoreNotifications()
-                .AddLogViewer()
-                .AddExamine()
-                .AddExamineIndexes()
-                .AddControllersWithAmbiguousConstructors();
+        public static IUmbracoBuilder AddBackOffice(this IUmbracoBuilder builder,
+            Action<IMvcBuilder> configureMvc = null) => builder
+            .AddConfiguration()
+            .AddUmbracoCore()
+            .AddWebComponents()
+            .AddRuntimeMinifier()
+            .AddBackOfficeCore()
+            .AddBackOfficeAuthentication()
+            .AddBackOfficeIdentity()
+            .AddMembersIdentity()
+            .AddBackOfficeAuthorizationPolicies()
+            .AddUmbracoProfiler()
+            .AddMvcAndRazor(configureMvc)
+            .AddWebServer()
+            .AddPreviewSupport()
+            .AddHostedServices()
+            .AddNuCache()
+            .AddDistributedCache()
+            .AddModelsBuilderDashboard()
+            .AddUnattendedInstallInstallCreateUser()
+            .AddCoreNotifications()
+            .AddLogViewer()
+            .AddExamine()
+            .AddExamineIndexes()
+            .AddControllersWithAmbiguousConstructors()
+            .AddSupplemenataryLocalizedTextFileSources();
 
         public static IUmbracoBuilder AddUnattendedInstallInstallCreateUser(this IUmbracoBuilder builder)
         {
@@ -133,6 +140,54 @@ namespace Umbraco.Extensions
                 ActivatorUtilities.CreateInstance<CurrentUserController>(sp));
 
             return builder;
+        }
+
+        public static IUmbracoBuilder AddSupplemenataryLocalizedTextFileSources(this IUmbracoBuilder builder)
+        {
+            builder.Services.AddTransient(sp =>
+            {
+                return GetSupplementaryFileSources(
+                    sp.GetRequiredService<IHostingEnvironment>(),
+                    sp.GetRequiredService<IWebHostEnvironment>());
+            });
+
+            return builder;
+        }
+
+        private static IEnumerable<LocalizedTextServiceSupplementaryFileSource> GetSupplementaryFileSources(
+            IHostingEnvironment hostingEnvironment,
+            IWebHostEnvironment webHostEnvironment)
+        {
+            var appPlugins = new DirectoryInfo(hostingEnvironment.MapPathContentRoot(Cms.Core.Constants.SystemDirectories.AppPlugins));
+            var configLangFolder = new DirectoryInfo(hostingEnvironment.MapPathContentRoot(WebPath.Combine(Cms.Core.Constants.SystemDirectories.Config, "lang")));
+
+            var pluginLangFolders = appPlugins.Exists == false
+                ? Enumerable.Empty<LocalizedTextServiceSupplementaryFileSource>()
+                : appPlugins.GetDirectories()
+                    // Check for both Lang & lang to support case sensitive file systems.
+                    .SelectMany(x => x.GetDirectories("?ang", SearchOption.AllDirectories).Where(x => x.Name.InvariantEquals("lang")))
+                    .SelectMany(x => x.GetFiles("*.xml", SearchOption.TopDirectoryOnly))
+                    .Select(x => new LocalizedTextServiceSupplementaryFileSource(x, false));
+
+
+            // user defined langs that overwrite the default, these should not be used by plugin creators
+            var userLangFolders = configLangFolder.Exists == false
+                ? Enumerable.Empty<LocalizedTextServiceSupplementaryFileSource>()
+                : configLangFolder
+                    .GetFiles("*.user.xml", SearchOption.TopDirectoryOnly)
+                    .Select(x => new LocalizedTextServiceSupplementaryFileSource(x, true));
+
+            foreach (LocalizedTextServiceSupplementaryFileSource fileSource in userLangFolders)
+            {
+                yield return fileSource;
+            }
+
+            foreach (LocalizedTextServiceSupplementaryFileSource fileSource in pluginLangFolders)
+            {
+                yield return fileSource;
+            }
+
+            // TODO: Get more from WebHostEnvironment.WebRootFileProvider
         }
     }
 }
